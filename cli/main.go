@@ -1,10 +1,9 @@
-// Command pygo is the PyGo framework CLI (Fase 0 / PoC).
+// Command pygo is the PyGo framework CLI (v2.0 — native dual-language architecture).
 //
 // Subcommands:
-//
-//	pygo new <name>       scaffold a new PyGo project
-//	pygo dev              transpile the first .pgo and start the dev server
-//	pygo build            build for production (--embed-python is a TODO)
+//   pygo new <name>    Scaffold a new PyGo project
+//   pygo dev            Start the dual-language dev server (:8080)
+//   pygo module <cmd>   Module management
 //
 // Only the Go standard library is used (flag). No third-party CLI framework
 // is added so go.mod stays untouched.
@@ -15,17 +14,15 @@ import (
 	"os"
 )
 
-const usage = `pygo — PyGo framework CLI (Fase 0 / PoC)
+const usage = `pygo — PyGo framework CLI (v2.0 — native dual-language)
 
 Usage:
   pygo <command> [arguments]
 
 Commands:
-  new <name>    Create a new PyGo project in ./<name>/
-  dev           Transpile the first .pgo file and start the dev server (:8080)
-  build         Build for production (use --embed-python for a single binary)
-  gen [file]    Transpile .pgo files to Go/Python
-  test          Run tests for the project
+  new <name>     Create a new PyGo project in ./<name>/
+  dev            Start the dev server (:8080) — Go HTTP + Python UDS bridge
+  module         Module discovery and management
 
 Run "pygo <command> -h" for command-specific flags.
 `
@@ -45,14 +42,8 @@ func main() {
 		err = runNew(args)
 	case "dev":
 		err = runDev(args)
-	case "build":
-		err = runBuild(args)
-	case "gen":
-		err = runGen(args)
 	case "module":
 		err = runModule(args)
-	case "test":
-		err = runTest(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

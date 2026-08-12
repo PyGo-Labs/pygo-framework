@@ -20,14 +20,18 @@ const MAX_POOL = 4
 
 // PythonProcess manages the Python subprocess lifecycle
 type PythonProcess struct {
-	cmd    *exec.Cmd
-	socket string
-	ready  bool
+	cmd       *exec.Cmd
+	socket    string
+	module    string // e.g. "app.core.main"
+	ready     bool
 }
 
-// Start launches python3 -m core.main (the domain server)
+// Start launches python3 -m <module> (the domain server)
 func (p *PythonProcess) Start(ctx context.Context) error {
-	p.cmd = exec.CommandContext(ctx, "python3", "-m", "core.main", "--socket", p.socket)
+	if p.module == "" {
+		p.module = "core.main" // default
+	}
+	p.cmd = exec.CommandContext(ctx, "python3", "-m", p.module, "--socket", p.socket)
 	p.cmd.Stdout = os.Stdout
 	p.cmd.Stderr = os.Stderr
 	if err := p.cmd.Start(); err != nil {
@@ -58,9 +62,13 @@ type Pool struct {
 	process  *PythonProcess
 }
 
-// NewPool creates and starts the Python process, then opens pooled UDS conns
-func NewPool(socketPath string) (*Pool, error) {
-	proc := &PythonProcess{socket: socketPath}
+// NewPool creates and starts the Python process, then opens pooled UDS conns.
+// modulePath is the Python module to run (e.g. "app.core.main").
+func NewPool(socketPath, modulePath string) (*Pool, error) {
+	proc := &PythonProcess{
+		socket: socketPath,
+		module: modulePath,
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := proc.Start(ctx); err != nil {

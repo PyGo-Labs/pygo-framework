@@ -19,23 +19,29 @@ type App struct {
 	router   http.Handler
 	pool     *bridge.Pool
 	socket   string
+	module   string // Python entry point, e.g. "app.core.main"
 }
 
-// NewApp creates a new PyGo web app with UDS bridge to Python
-func NewApp(socketPath string) *App {
+// NewApp creates a new PyGo web app with UDS bridge to Python.
+// socketPath: UDS socket path (empty = default).
+// pyModule: Python entry module, e.g. "app.core.main" (empty = "core.main").
+func NewApp(socketPath, pyModule string) *App {
 	if socketPath == "" {
-		// Default: storage/.pygo.sock
 		socketPath = filepath.Join("storage", ".pygo.sock")
 	}
 	os.MkdirAll(filepath.Dir(socketPath), 0o755)
+	if pyModule == "" {
+		pyModule = "core.main"
+	}
 	return &App{
 		socket: socketPath,
+		module: pyModule,
 	}
 }
 
 // Init starts the Python subprocess and opens UDS connection pool
 func (a *App) Init() error {
-	pool, err := bridge.NewPool(a.socket)
+	pool, err := bridge.NewPool(a.socket, a.module)
 	if err != nil {
 		return err
 	}
@@ -107,7 +113,7 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 //       app.Run(":8080")
 //   }
 func Main() {
-	app := NewApp("")
+	app := NewApp("", "core.main")  // default module
 	if err := app.Init(); err != nil {
 		log.Fatalf("failed to init: %v", err)
 	}

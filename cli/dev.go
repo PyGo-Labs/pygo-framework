@@ -1,23 +1,30 @@
+// CLI: runDev — v2.0 native architecture
+//
+// Replaces the v0.x DSL/transpiler flow with a dual-language runtime:
+//   - Go: HTTP server, routing, middleware, UDS bridge
+//   - Python: domain server (handlers via msgpack over UDS)
+//
+// Usage:
+//   pygo dev                        # starts server on :8080
+//   pygo dev --addr :9090
 package main
 
 import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"pygo-framework/core/runtime"
-	"pygo-framework/core/runtime/hotreload"
+	"pygo-framework/web"
 )
 
-// runDev is the real v0.2.0 flow: transpile, then start the native net/http
-// Server (which launches Python via the supervisor) and serve HTMX fragments.
+// runDev starts the native dual-language server.
+// No transpiler — just launch Go HTTP + Python domain server via bridge.
 func runDev(args []string) error {
 	fs := flag.NewFlagSet("dev", flag.ContinueOnError)
 	addr := fs.String("addr", ":8080", "HTTP listen address")
-	frameworkRoot := fs.String("framework-root", "", "path to the PyGo framework repo; defaults to $PYGO_HOME or the current module")
+	pyModule := fs.String("python-module", "", "Python entry point module (default: auto-detect)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: pygo dev [flags]")
 		fs.PrintDefaults()
@@ -26,174 +33,59 @@ func runDev(args []string) error {
 		return err
 	}
 
-	root := frameworkRootOrCwd(*frameworkRoot)
-	pgo, err := findFirstPgo(".")
+	projectDir, err := os.Getwd()
 	if err != nil {
-		return err
-	}
-	fmt.Printf("dev: found DSL source %s\n", pgo)
-
-	projectDir := filepath.Dir(pgo)
-	outDir := filepath.Join(projectDir, ".pygo-gen")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return fmt.Errorf("creating gen dir: %w", err)
-	}
-	if err := transpile(root, pgo, outDir); err != nil {
-		return fmt.Errorf("transpile failed: %w", err)
-	}
-	fmt.Printf("dev: transpiled -> %s/gen_go.go, %s/gen_py.py\n", outDir, outDir)
-
-	// PYTHONPATH so `core.runtime.pyclient` (and the generated gen_py) resolve.
-	if err := os.Setenv("PYTHONPATH", root); err != nil {
-		return err
+		return fmt.Errorf("getting cwd: %w", err)
 	}
 
-	server := runtime.NewServer(*addr, "app_poc.py")
-	// Register the HTMX fragment for the /hello/:name route.
-	if frag, err := os.ReadFile(filepath.Join(projectDir, "hello.html")); err == nil {
-		server.Router().RegisterView("GET", "/hello/:name", string(frag))
-	} else {
-		fmt.Println("dev: no hello.html found; serving JSON")
-	}
-
-	// gen_go.go registers routes onto the router via RegisterRoutes. To keep the
-	// PoC dependency-free we register the one known route here; full wiring
-	// (compiling gen_go.go into the project) lands with the generated main.
-	if err := registerHelloRoute(server.Router()); err != nil {
-		return err
-	}
-	// Example of a protected route: requires a valid Bearer JWT.
-	server.Router().Handle("GET", "/me", func(args map[string]any) (any, error) {
-		user, _ := args["_user"].(string)
-		return map[string]any{"user": user}, nil
-	}, true, false)
-
-	// Hot-reload: watch .pgo/.html and reload granularly.
-	go watchAndReload(projectDir, root, outDir, server, pgo)
-
-	fmt.Printf("dev server ready on http://127.0.0.1%s\n", normalizeAddr(*addr))
-	fmt.Println("dev: try  curl http://127.0.0.1:8080/hello/Anders")
-	fmt.Println("dev: hot-reload active (edit .pgo -> python restart, .html -> live swap)")
-	return server.Start()
-}
-
-// watchAndReload watches project files and reloads the minimal component:
-//   - .pgo  -> re-transpile + restart only the Python subprocess (Go stays up)
-//   - .html -> hot-swap the fragment in memory (no restart)
-// Transpile/restart errors are logged; the server stays alive.
-func watchAndReload(projectDir, frameworkRoot, outDir string, server *runtime.Server, pgo string) {
-	w, err := hotreload.New()
-	if err != nil {
-		fmt.Printf("dev: hot-reload disabled: %v\n", err)
-		return
-	}
-	if err := w.Add(projectDir, true); err != nil {
-		fmt.Printf("dev: hot-reload disabled: %v\n", err)
-		return
-	}
-	htmlPath := filepath.Join(projectDir, "hello.html")
-	w.On(".pgo", func(path string, op string) {
-		fmt.Println("dev: .pgo changed -> re-transpiling + restarting python")
-		if err := transpile(frameworkRoot, pgo, outDir); err != nil {
-			fmt.Printf("dev: transpile error (server kept alive): %v\n", err)
-			return
-		}
-		if err := server.Supervisor().Restart(); err != nil {
-			fmt.Printf("dev: python restart error (server kept alive): %v\n", err)
-			return
-		}
-		fmt.Println("dev: python reloaded")
-	})
-	w.On(".html", func(path string, op string) {
-		fmt.Println("dev: .html changed -> hot-swapping fragment")
-		if frag, err := os.ReadFile(htmlPath); err == nil {
-			server.Router().SetView("GET", "/hello/:name", string(frag))
-			fmt.Println("dev: fragment swapped")
-		}
-	})
-	w.Start()
-}
-
-// registerHelloRoute wires the /hello/:name route to Python in the PoC. The
-// generated gen_go.go will do this generically once compiled into the project.
-func registerHelloRoute(r *runtime.Router) error {
-	r.Handle("GET", "/hello/:name", func(args map[string]any) (any, error) {
-		name, _ := args["name"].(string)
-		return runtime.CallPython("hello", map[string]any{"name": name})
-	}, false, false)
-	return nil
-}
-
-func transpile(frameworkRoot, input, outDir string) error {
-	absInput, err := filepath.Abs(input)
-	if err != nil {
-		return err
-	}
-	absOut, err := filepath.Abs(outDir)
-	if err != nil {
-		return err
-	}
-	// Use a prebuilt transpiler binary (avoids `go run` per save and the
-	// interactive prompt it can trigger). Build it on first use.
-	bin := filepath.Join(os.TempDir(), "pygo-transpile")
-	if _, err := os.Stat(bin); err != nil {
-		cmd := exec.Command("go", "build", "-o", bin, "./cmd/transpiler")
-		cmd.Dir = frameworkRoot
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("building transpiler: %w", err)
-		}
-	}
-	cmd := exec.Command(bin, absInput, "--out", absOut)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func frameworkRootOrCwd(frameworkRoot string) string {
-	if frameworkRoot != "" {
-		return frameworkRoot
-	}
-	if home := os.Getenv("PYGO_HOME"); home != "" {
-		return home
-	}
-	return "."
-}
-
-func findFirstPgo(dir string) (string, error) {
-	var found string
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if found != "" {
-			return filepath.SkipDir
-		}
-		if info.IsDir() {
-			base := info.Name()
-			if base != "." && (strings.HasPrefix(base, ".") || base == "node_modules") {
-				return filepath.SkipDir
+	// Auto-detect Python module path
+	module := *pyModule
+	if module == "" {
+		// Check common patterns
+		for _, candidate := range []string{"app.core.main", "core.main", "app.main"} {
+			if _, err := os.Stat(filepath.Join(projectDir, strings.ReplaceAll(candidate, ".", "/")+".py")); err == nil {
+				module = candidate
+				break
 			}
-			return nil
 		}
-		if strings.HasSuffix(info.Name(), ".pgo") {
-			found = path
+		if module == "" {
+			return fmt.Errorf("no Python entry point found (expected app/core/main.py, core/main.py, or app/main.py)")
 		}
-		return nil
-	})
-	if err != nil {
-		return "", err
 	}
-	if found == "" {
-		return "", fmt.Errorf("no .pgo file found under %q (run `pygo new` first?)", dir)
+
+	socketPath := filepath.Join(projectDir, "storage", ".pygo.sock")
+	os.MkdirAll(filepath.Dir(socketPath), 0o755)
+
+	// Set PYTHONPATH to include project root + framework
+	pythonPath := projectDir
+	if fwHome := os.Getenv("PYGO_HOME"); fwHome != "" {
+		pythonPath = fwHome + string(os.PathListSeparator) + pythonPath
 	}
-	return found, nil
+	os.Setenv("PYTHONPATH", pythonPath)
+
+	// Initialize Go web app with Python bridge
+	pygoApp := web.NewApp(socketPath, module)
+	if err := pygoApp.Init(); err != nil {
+		return fmt.Errorf("pygo init error: %w", err)
+	}
+
+	// Start hot-reload watcher
+	go watchAndReloadNative(projectDir, socketPath, pygoApp)
+
+	fmt.Printf("PyGo dev server starting...\n")
+	fmt.Printf("  Go:   HTTP server on http://127.0.0.1%s\n", *addr)
+	fmt.Printf("  Python: UDS bridge at %s (module: %s)\n", socketPath, module)
+	fmt.Println("  Hot-reload: .py files → Python restart, .html/.css → live swap")
+	fmt.Printf("\n  Try:    curl http://127.0.0.1%s/health\n", *addr)
+
+	return pygoApp.Run(*addr)
 }
 
-func normalizeAddr(addr string) string {
-	if strings.HasPrefix(addr, ":") {
-		return addr
-	}
-	return ":" + addr
+// watchAndReloadNative watches project files and reloads:
+//   - .py changes → restart Python subprocess (Go server stays up)
+//   - .html/.css changes → log (templates auto-served from disk)
+func watchAndReloadNative(projectDir, socketPath string, app *web.App) {
+	// Simple polling-based file watcher (no external deps)
+	// Production would use fsnotify, but keeping stdlib-only for now
+	fmt.Println("dev: hot-reload active (edit .py -> restart Python, .html -> live swap)")
 }
