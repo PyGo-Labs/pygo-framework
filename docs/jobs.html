@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>jobs — PyGo Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@11/water.min.css">
+  <style>.pygo-header{color:#2563EB;border-bottom:3px solid #2563EB;padding-bottom:.5rem}body a{color:#2563EB}</style>
+</head>
+<body>
+  <nav class="pygo-header"><a href="index.html">PyGo Framework Docs</a> · v2.0</nav>
+  <main>
+    <h1>jobs</h1>
+    <p><code>jobs</code></p>
+    <div>Package jobs provides an in-memory background job queue. It uses a buffered
+channel &#43; a worker goroutine — no external deps (no Redis, no frameworks).
+The actual Python execution is delegated via an Executor callback provided
+at Init time (avoids import cycle jobs→runtime).
+</div>
+    <h2>Types</h2>
+    <h3><code>Executor</code></h3><p>Executor is the function that runs a job (e.g., calls Python via runtime.CallPython).
+</p><h3><code>Job</code></h3><p>Job tracks a single background execution.
+</p><h3><code>JobNotFoundError</code></h3><p>JobNotFoundError is returned when a job ID doesn&#39;t exist.
+</p><h3><code>Queue</code></h3><p>Queue is an in-memory job queue with a single worker goroutine.
+</p><h3><code>Status</code></h3><p>Status is the lifecycle state of a job.
+</p>
+    <h2>Functions</h2>
+    <h3><code>EnqueueJob</code></h3><p>EnqueueJob is the package-level entry gen_go calls. It returns a map so the
+router can JSON-encode it directly as a 202 ...</p><h3><code>GetJob</code></h3><p>GetJob returns a job&#39;s status by ID. gen_go uses this for the /jobs/:id route.
+</p><h3><code>Init</code></h3><p>Init starts the default queue with the given executor. Safe to call once.
+</p><h3><code>Shutdown</code></h3><p>Shutdown stops the worker goroutine (graceful).
+</p>
+  </main>
+</body>
+</html>

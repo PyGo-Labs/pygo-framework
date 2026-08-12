@@ -4,6 +4,7 @@
 //   pygo new <name>    Scaffold a new PyGo project
 //   pygo dev            Start the dual-language dev server (:8080)
 //   pygo module <cmd>   Module management
+//   pygo docs           Generate HTML documentation from Go code
 //
 // Only the Go standard library is used (flag). No third-party CLI framework
 // is added so go.mod stays untouched.
@@ -23,6 +24,8 @@ Commands:
   new <name>     Create a new PyGo project in ./<name>/
   dev            Start the dev server (:8080) — Go HTTP + Python UDS bridge
   module         Module discovery and management
+  docs           Generate HTML documentation from Go code
+  help           Show this help message
 
 Run "pygo <command> -h" for command-specific flags.
 `
@@ -44,6 +47,8 @@ func main() {
 		err = runDev(args)
 	case "module":
 		err = runModule(args)
+	case "docs":
+		err = runDocs(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

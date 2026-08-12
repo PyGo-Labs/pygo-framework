@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>runtime — PyGo Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@11/water.min.css">
+  <style>.pygo-header{color:#2563EB;border-bottom:3px solid #2563EB;padding-bottom:.5rem}body a{color:#2563EB}</style>
+</head>
+<body>
+  <nav class="pygo-header"><a href="index.html">PyGo Framework Docs</a> · v2.0</nav>
+  <main>
+    <h1>runtime</h1>
+    <p><code>runtime</code></p>
+    <div>Package runtime supervises the Python subprocess and exposes CallPython, the
+bridge the transpiler-generated gen_go.go uses to delegate handlers to Python.
+
+Lifecycle:
+ 1. Supervisor.Start opens the UDS listener (Go is the server).
+ 2. It launches `python3 &lt;module&gt;` with PYGO_SOCKET set to the socket path.
+ 3. It waits (Accept) for the Python client to dial in.
+ 4. CallPython sends a {handler, args} frame and blocks for the response.
+
+The package keeps a process-wide default Supervisor so generated code can call
+the package-level runtime.CallPython without threading a handle everywhere.
+
+Package runtime — test helpers for PyGo dual-language integration tests.
+Provides repoRoot() and contains() used by v-series integration tests.
+</div>
+    <h2>Types</h2>
+    <h3><code>Claims</code></h3><p>Claims is the JWT payload. Sub is the subject (user id); Exp is unix expiry.
+</p><h3><code>Config</code></h3><p>Config parameterizes a Supervisor.
+</p><h3><code>Router</code></h3><p>Router adapts generated routes to the standard library net/http mux.
+Generated gen_go.go calls RegisterRoutes(r) where r...</p><h3><code>Server</code></h3><p>Server ties the HTTP router to the Python supervisor lifecycle.
+</p><h3><code>Supervisor</code></h3><p>Supervisor owns the Python subprocess and its socket connection.
+</p>
+    <h2>Functions</h2>
+    <h3><code>AuthMiddleware</code></h3><p>AuthMiddleware wraps a handler, requiring a valid Bearer token. On success it
+injects the subject into args[&#34;_user&#34;].
+</p><h3><code>CallPython</code></h3><p>CallPython is the package-level entry the generated gen_go.go uses. It
+delegates to the default Supervisor registered vi...</p><h3><code>EnqueueJob</code></h3><p>EnqueueJob adds a background job to the default queue. gen_go calls this for
+worker routes. It must be callable from the...</p><h3><code>GetJob</code></h3><p>GetJob returns a job&#39;s status by ID. gen_go uses this for the /jobs/:id route.
+</p><h3><code>SetDefault</code></h3><p>SetDefault registers s as the process-wide Supervisor used by the package-level
+CallPython helper.
+</p><h3><code>SignHS256</code></h3><p>SignHS256 builds a compact JWT (header.payload.signature) signed with the
+secret using HMAC-SHA256.
+</p><h3><code>TenantFromRequest</code></h3><p>TenantFromRequest resolves the active tenant for a request.
+
+Priority: explicit X-Tenant-ID header, then the leftmost su...</p><h3><code>TestV030ORM</code></h3><p>TestV030ORM starts the native server, creates a Customer via the create
+handler (query params) and reads it back via get...</p><h3><code>TestV040Auth</code></h3><p>TestV040Auth verifies the native JWT middleware: a protected route returns
+401 without a token and 200 with a valid Bear...</p><h3><code>TestV060HotReload</code></h3><p>TestV060HotReload verifies that editing a .html fragment hot-swaps into the
+running server without restarting it. The Go...</p><h3><code>TestV070Tenancy</code></h3><p>TestV070Tenancy verifies two tenants get isolated databases: a Customer
+created under tenant &#34;acme&#34; is not visible under...</p><h3><code>TestV080Operations</code></h3><p>TestV080Operations verifies the operational surface: /healthz liveness,
+graceful shutdown (Stop returns cleanly), and th...</p><h3><code>TestV100ReportsI18n</code></h3><p>TestV100ReportsI18n verifies CSV report endpoint and i18n via Accept-Language.
+</p><h3><code>TestV180Validators</code></h3><p>TestV180Validators verifies type validation module exists.
+</p>
+  </main>
+</body>
+</html>

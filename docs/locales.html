@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>locales — PyGo Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@11/water.min.css">
+  <style>.pygo-header{color:#2563EB;border-bottom:3px solid #2563EB;padding-bottom:.5rem}body a{color:#2563EB}</style>
+</head>
+<body>
+  <nav class="pygo-header"><a href="index.html">PyGo Framework Docs</a> · v2.0</nav>
+  <main>
+    <h1>locales</h1>
+    <p><code>locales</code></p>
+    <div>Package locales provides i18n support for Python handlers. Loads JSON dictionaries
+from core/runtime/locales/{en,es}.json and exposes t(key) function.
+</div>
+    
+    <h2>Functions</h2>
+    <h3><code>GetAll</code></h3><p>GetAll returns all loaded locales (for debugging/inspection).
+</p><h3><code>Load</code></h3><p>Load loads locale dictionaries from the locales directory.
+Called once at startup by the Python runtime (pyclient serve)...</p><h3><code>T</code></h3><p>T translates a key for the given locale. Falls back to &#34;en&#34; then key itself.
+</p>
+  </main>
+</body>
+</html>

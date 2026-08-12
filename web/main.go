@@ -5,8 +5,10 @@ package web
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,7 +33,7 @@ type Router struct {
 	mux   *http.ServeMux
 	pool  *bridge.Pool
 	auth  map[string]bool // protected routes
-	muxed map[string]map[string]func(map[string]interface{}) (interface{}, error)
+	muxed map[string]map[string]func(map[string]interface{}) (interface{}, error) // method dispatch
 }
 
 // ServeHTTP implements http.Handler — delegates to the underlying mux.
@@ -64,15 +66,13 @@ func (a *App) Router() *Router {
 
 // Handle registers an HTTP route. Supports multiple HTTP methods on
 // the same pattern by using an internal method-dispatch wrapper.
-// If requiresPython is true, the handler is expected to call app.Call()
-// to delegate to Python.
+// If auth is true, the route is protected (placeholder middleware).
 func (r *Router) Handle(method, pattern string, handler func(map[string]interface{}) (interface{}, error), auth, websockets bool) {
 	key := method + " " + pattern
 	r.auth[key] = auth
 
 	// Check if pattern already registered — use muxer map for method dispatch
 	if existing, ok := r.muxed[pattern]; ok {
-		// Append method+handler to the dispatch map
 		existing[method] = handler
 		return
 	}
@@ -80,20 +80,47 @@ func (r *Router) Handle(method, pattern string, handler func(map[string]interfac
 		method: handler,
 	}
 	r.mux.HandleFunc(pattern, func(w http.ResponseWriter, req *http.Request) {
-		// Method dispatch
 		handlers := r.muxed[pattern]
 		h, ok := handlers[req.Method]
 		if !ok {
-			// Try wildcard "" for methods without method filter
 			if h, ok = handlers[""]; !ok {
 				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 				return
 			}
 		}
+		ctx := extractParams(pattern, req.URL.Path)
+		// Inject request body params (form & JSON) for POST handlers
+		if req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
+			if err := req.ParseForm(); err == nil {
+				for k, v := range req.PostForm {
+					if len(v) > 0 {
+						ctx[k] = v[0]
+					}
+				}
+			}
+			// Also try JSON body
+			if ct := req.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
+				if raw, err := io.ReadAll(req.Body); err == nil && len(raw) > 0 {
+					var jsonMap map[string]interface{}
+					if json.Unmarshal(raw, &jsonMap) == nil {
+						for k, v := range jsonMap {
+							ctx[k] = v
+						}
+					} else {
+						if pairs, err := url.ParseQuery(string(raw)); err == nil {
+							for k, v := range pairs {
+								if len(v) > 0 {
+									ctx[k] = v[0]
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 		if r.auth[req.Method+" "+pattern] {
 			// Auth placeholder
 		}
-		ctx := extractParams(pattern, req.URL.Path)
 		result, err := h(ctx)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -112,15 +139,19 @@ func (r *Router) Handle(method, pattern string, handler func(map[string]interfac
 	})
 }
 
-// Call delegates to Python domain layer via bridge.
-// Usage: result, err := app.Router().Pool().Call("core.services.hello", {})
+// Pool returns the bridge pool for direct calls (if needed).
 func (r *Router) Pool() *bridge.Pool {
 	return r.pool
 }
 
+// Call delegates to Python domain layer via bridge.
+// Usage: result, err := app.Router().Call("core.services.users.list", map[string]any{"id": 123})
+func (a *App) Call(method string, args map[string]interface{}) (interface{}, error) {
+	return a.pool.Call(method, args)
+}
+
 // extractParams extracts path params from pattern and request path.
 // Supports Go 1.22+ syntax: /hello/{name}
-// Falls back to legacy :name syntax for compatibility.
 func extractParams(pattern, path string) map[string]interface{} {
 	ctx := map[string]interface{}{}
 	parts := splitPath(path)
@@ -129,23 +160,20 @@ func extractParams(pattern, path string) map[string]interface{} {
 		if i >= len(parts) {
 			break
 		}
-		// Go 1.22+ {param} syntax
 		if len(p) >= 2 && p[0] == '{' && p[len(p)-1] == '}' {
 			paramName := p[1 : len(p)-1]
-			// Handle {name} or {name:regex}
 			if idx := strings.Index(paramName, ":"); idx != -1 {
 				paramName = paramName[:idx]
 			}
 			ctx[paramName] = parts[i]
 		} else if len(p) > 1 && p[0] == ':' {
-			// Legacy :param syntax (fallback)
 			ctx[p[1:]] = parts[i]
 		}
 	}
 	return ctx
 }
 
-func splitPathImpl(p string) []string {
+func splitPath(p string) []string {
 	p = strings.Trim(p, "/")
 	if p == "" {
 		return []string{}
@@ -153,20 +181,14 @@ func splitPathImpl(p string) []string {
 	return strings.Split(p, "/")
 }
 
-func splitPath(p string) []string {
-	return splitPathImpl(p)
-}
-
+// Init starts the Python domain process via the UDS bridge.
 func (a *App) Init() error {
 	pool, err := bridge.NewPool(a.socket, a.module, a.projectDir)
 	if err != nil {
 		return err
 	}
 	a.pool = pool
-	a.router.pool = pool // inject pool into router for handler access
-
-	// Default routes are registered by the app, not here
-	// Modules register their own routes via app.Router().Handle()
+	a.router.pool = pool
 	return nil
 }
 
@@ -176,7 +198,7 @@ func mustJSON(v interface{}) string {
 	return string(b)
 }
 
-// Run starts the HTTP server on :8080
+// Run starts the HTTP server.
 func (a *App) Run(addr string) error {
 	if addr == "" {
 		addr = ":8080"
@@ -188,7 +210,6 @@ func (a *App) Run(addr string) error {
 
 	// Graceful shutdown
 	go func() {
-		// Wait for interrupt signal
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
@@ -201,43 +222,4 @@ func (a *App) Run(addr string) error {
 	log.Printf("PyGo web server ready on %s", addr)
 	log.Printf("UDS bridge to Python: %s", a.socket)
 	return srv.ListenAndServe()
-}
-
-// Call delegates to Python domain layer via bridge
-// Usage: result, err := app.Call("core.services.users.get_profile", map[string]any{"id": 123})
-func (a *App) Call(method string, args map[string]interface{}) (interface{}, error) {
-	return a.pool.Call(method, args)
-}
-
-// handleRoot is a simple dashboard route
-func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(`<!DOCTYPE html>
-<html><head><title>PyGo ERP</title></head>
-<body><h1>PyGo ERP — Running</h1>
-<p>Server: Go 1.23 + Python bridge ready</p>
-</body></html>`))
-}
-
-// handleHealth returns JSON health status
-func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok","runtime":"hybrid","languages":["go","python"]}`))
-}
-
-// Main is the entry point — should be called from app/web/main.go
-// Usage:
-//   func main() {
-//       app := web.NewApp("")
-//       app.Init()
-//       app.Run(":8080")
-//   }
-func Main() {
-	app := NewApp("", "core.main")  // default module
-	if err := app.Init(); err != nil {
-		log.Fatalf("failed to init: %v", err)
-	}
-	if err := app.Run(os.Getenv("PORT")); err != nil {
-		log.Fatalf("failed to run: %v", err)
-	}
 }

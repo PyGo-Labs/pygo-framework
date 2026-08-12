@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>hotreload — PyGo Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@11/water.min.css">
+  <style>.pygo-header{color:#2563EB;border-bottom:3px solid #2563EB;padding-bottom:.5rem}body a{color:#2563EB}</style>
+</head>
+<body>
+  <nav class="pygo-header"><a href="index.html">PyGo Framework Docs</a> · v2.0</nav>
+  <main>
+    <h1>hotreload</h1>
+    <p><code>hotreload</code></p>
+    <div>Package hotreload watches PyGo source files (.pgo/.yaml/.html/.toml) with
+fsnotify and dispatches per-extension callbacks. In this PoC it only detects
+and logs changes; a restart hook is left for the caller to wire up. The
+watcher keeps running even when a downstream compile fails so the dev process
+stays alive (ARCHITECTURE.md §5).
+</div>
+    <h2>Types</h2>
+    <h3><code>Callback</code></h3><p>Callback is invoked with the changed file path and the fsnotify op string.
+</p><h3><code>Watcher</code></h3><p>Watcher wraps fsnotify and routes events to per-extension callbacks.
+</p>
+    
+  </main>
+</body>
+</html>

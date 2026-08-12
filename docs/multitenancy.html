@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>multitenancy — PyGo Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@11/water.min.css">
+  <style>.pygo-header{color:#2563EB;border-bottom:3px solid #2563EB;padding-bottom:.5rem}body a{color:#2563EB}</style>
+</head>
+<body>
+  <nav class="pygo-header"><a href="index.html">PyGo Framework Docs</a> · v2.0</nav>
+  <main>
+    <h1>multitenancy</h1>
+    <p><code>multitenancy</code></p>
+    <div>Package multitenancy provides multi-tenant support for PyGo framework.
+</div>
+    <h2>Types</h2>
+    <h3><code>ContextKey</code></h3><p>ContextKey is used for context values.
+</p><h3><code>ErrTenant</code></h3><p></p><h3><code>Settings</code></h3><p>Settings holds tenant-specific configuration.
+</p><h3><code>Store</code></h3><p>Store holds tenant registry in-memory (for development).
+</p><h3><code>Tenant</code></h3><p>Tenant represents an isolated customer in the system.
+</p>
+    <h2>Functions</h2>
+    <h3><code>Middleware</code></h3><p>Middleware detects and injects tenant into request context.
+Detects tenant via subdomain (e.g., acme.myapp.com) or API k...</p><h3><code>QueryScope</code></h3><p>QueryScope returns tenant-specific query modifications.
+In production, add WHERE clause for tenant_id or use schema.
+</p><h3><code>TestContext</code></h3><p></p><h3><code>TestMiddleware</code></h3><p></p><h3><code>TestProvision</code></h3><p></p><h3><code>TestStore</code></h3><p></p><h3><code>WithTenant</code></h3><p>WithTenant puts tenant into context.
+</p>
+  </main>
+</body>
+</html>

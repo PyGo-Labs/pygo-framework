@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>socket — PyGo Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@11/water.min.css">
+  <style>.pygo-header{color:#2563EB;border-bottom:3px solid #2563EB;padding-bottom:.5rem}body a{color:#2563EB}</style>
+</head>
+<body>
+  <nav class="pygo-header"><a href="index.html">PyGo Framework Docs</a> · v2.0</nav>
+  <main>
+    <h1>socket</h1>
+    <p><code>socket</code></p>
+    <div>Package socket implements the Unix Domain Socket transport between the Go
+server and the Python runtime. Payloads are MessagePack-encoded frames of the
+shape {handler: string, args: map}. Each frame is length-prefixed (4-byte
+big-endian uint32) so Send/Recv can operate on a streaming connection.
+</div>
+    <h2>Types</h2>
+    <h3><code>Conn</code></h3><p>Conn is a length-prefixed MessagePack framed connection. It is safe for one
+concurrent writer and one concurrent reader;...</p><h3><code>CrossError</code></h3><p>CrossError is the unified cross-language error struct (see ARCHITECTURE.md §6).
+It is produced on either side (Go or Py...</p><h3><code>Listener</code></h3><p>Listener wraps a net.Listener bound to a UDS path. Go acts as the socket
+server; the Python client dials in.
+</p><h3><code>Payload</code></h3><p>Payload is the wire message exchanged between Go and Python.
+Handler is the target handler name; Args carries its keywor...</p><h3><code>Response</code></h3><p>Response is what Python returns for a given Payload. Exactly one of Result or
+Error is meaningful: if Error is non-nil t...</p>
+    
+  </main>
+</body>
+</html>
