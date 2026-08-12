@@ -28,9 +28,10 @@ type App struct {
 // Router is the PyGo HTTP router — Go native http.ServeMux wrapper
 // that can delegate to Python handlers via the bridge.
 type Router struct {
-	mux  *http.ServeMux
-	pool *bridge.Pool
-	auth map[string]bool // protected routes
+	mux   *http.ServeMux
+	pool  *bridge.Pool
+	auth  map[string]bool // protected routes
+	muxed map[string]map[string]func(map[string]interface{}) (interface{}, error)
 }
 
 // ServeHTTP implements http.Handler — delegates to the underlying mux.
@@ -51,7 +52,7 @@ func NewApp(socketPath, pyModule string) *App {
 	return &App{
 		socket:     socketPath,
 		module:     pyModule,
-		router:     &Router{mux: http.NewServeMux(), auth: make(map[string]bool)},
+		router:     &Router{mux: http.NewServeMux(), auth: make(map[string]bool), muxed: make(map[string]map[string]func(map[string]interface{}) (interface{}, error))},
 		projectDir: projectDir,
 	}
 }
@@ -61,25 +62,44 @@ func (a *App) Router() *Router {
 	return a.router
 }
 
-// Handle registers an HTTP route. If requiresPython is true, the handler
-// is expected to call app.Call() to delegate to Python.
+// Handle registers an HTTP route. Supports multiple HTTP methods on
+// the same pattern by using an internal method-dispatch wrapper.
+// If requiresPython is true, the handler is expected to call app.Call()
+// to delegate to Python.
 func (r *Router) Handle(method, pattern string, handler func(map[string]interface{}) (interface{}, error), auth, websockets bool) {
 	key := method + " " + pattern
 	r.auth[key] = auth
+
+	// Check if pattern already registered — use muxer map for method dispatch
+	if existing, ok := r.muxed[pattern]; ok {
+		// Append method+handler to the dispatch map
+		existing[method] = handler
+		return
+	}
+	r.muxed[pattern] = map[string]func(map[string]interface{}) (interface{}, error){
+		method: handler,
+	}
 	r.mux.HandleFunc(pattern, func(w http.ResponseWriter, req *http.Request) {
-		if method != "" && req.Method != method {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		// Method dispatch
+		handlers := r.muxed[pattern]
+		h, ok := handlers[req.Method]
+		if !ok {
+			// Try wildcard "" for methods without method filter
+			if h, ok = handlers[""]; !ok {
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
+		}
+		if r.auth[req.Method+" "+pattern] {
+			// Auth placeholder
+		}
+		ctx := extractParams(pattern, req.URL.Path)
+		result, err := h(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Extract path params (simple :param extraction)
-		ctx := extractParams(pattern, req.URL.Path)
-		// Inject authenticated user if route is protected
-		if auth {
-			ctx["_user"] = "authenticated_user" // placeholder
-		}
-		if result, err := handler(ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		} else if m, ok := result.(map[string]interface{}); ok {
+		if m, ok := result.(map[string]interface{}); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(mustJSON(m)))
 		} else if s, ok := result.(string); ok {
