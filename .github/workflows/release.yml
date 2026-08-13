@@ -3,104 +3,50 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  goreleaser:
-    needs: [test]
+  release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.22'
-    
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/go/pkg/mod
-          ~/.cache/go-build
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-    
-    - name: Run GoReleaser
-      uses: goreleaser/goreleaser-action@v5
-      with:
-        version: latest
-    
-    - name: Upload release assets
-      uses: actions/upload-artifact@v4
-      with:
-        name: binaries
-        path: dist/
-    
-  homebrew:
-    needs: goreleaser
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-    - name: Create Homebrew Tap PR
-      uses: Homebrew/actions/create-pull-request@v4
-      with:
-        tap: Homebrew/homebrew-tap
-        api-token: ${{ secrets.HOMEBREW_API_TOKEN }}
-        file: |
-          Formula/pygo.rb: |
-            class Pygo < Formula
-              desc "Modern web framework with Go backend and Python flexibility"
-              homepage "https://pygo.dev"
-              url "https://github.com/Ander-Labs/pygo/releases/download/<%= version %>/pygo_<%= version %>_darwin_amd64.tar.gz"
-              sha256 <%= sha256 %>
-              license "AGPL-3.0"
-              
-              depends_on "go" => ">= 1.22"
-              depends_on "python@3.10"
-              
-              def install
-                bin.install "pygo"
-              end
-              
-              test do
-                system "#{bin}/pygo", "version"
-              end
-            end
-      env:
-        HOMEBREW_API_TOKEN: ${{ secrets.HOMEBREW_API_TOKEN }}
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
 
-  scoop:
-    needs: goreleaser
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
     steps:
-    - name: Create Scoop Manifest
-      run: |
-        mkdir -p scoop
-        cat > scoop/pygo.json << 'EOF'
-        {
-          "version": "${{ github.ref_name }}",
-          "description": "Modern web framework with Go backend and Python flexibility",
-          "homepage": "https://pygo.dev",
-          "license": "AGPL-3.0",
-          "url": "https://github.com/Ander-Labs/pygo/releases/download/${{ github.ref_name }}/pygo_${{ github.ref_name }}_windows_amd64.zip",
-          "hash": {
-            "sha256": "$(curl -sL https://github.com/Ander-Labs/pygo/releases/download/${{ github.ref_name }}/pygo_${{ github.ref_name }}_windows_amd64.zip.sha256 | cut -f1)"
-          },
-          "bin": "pygo.exe",
-          "after_install": "pygo doctor"
-        }
-        EOF
-      env:
-        SCOOP_REPO: github.com/Andersonruizr2/Scoop
-        SCOOP_BUCKET: main
-        SCOOP_MANIFEST: pygo.json
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION=${GITHUB_REF_NAME}
+          FILENAME="pygo-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            FILENAME="${FILENAME}.exe"
+          fi
+          echo "Building ${FILENAME}..."
+          go build -ldflags="-s -w" -o "${FILENAME}" ./cli/
+          echo "FILENAME=${FILENAME}" >> $GITHUB_ENV
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.FILENAME }}
