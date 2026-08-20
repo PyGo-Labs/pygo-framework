@@ -129,10 +129,12 @@ func (r *Router) routeHandler(pattern string) http.HandlerFunc {
 			return
 		}
 
-		// Filter internal params
+		// Filter internal params: these are transport-level and must never
+		// reach a handler that forwards **data straight into a SQL INSERT.
+		internal := map[string]bool{"token": true, "_path": true, "_method": true}
 		handlerCtx := make(map[string]interface{})
 		for k, v := range ctx {
-			if k != "token" {
+			if !internal[k] {
 				handlerCtx[k] = v
 			}
 		}
