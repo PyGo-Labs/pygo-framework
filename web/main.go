@@ -129,9 +129,10 @@ func (r *Router) routeHandler(pattern string) http.HandlerFunc {
 			return
 		}
 
-		// Filter internal params: these are transport-level and must never
-		// reach a handler that forwards **data straight into a SQL INSERT.
-		internal := map[string]bool{"token": true, "_path": true, "_method": true}
+		// Filter transport-level params only. `token` must stay: handlers that
+		// authenticate themselves (auth.users.*) receive it as a real argument,
+		// and Python handlers that don't want it swallow it via **kwargs.
+		internal := map[string]bool{"_path": true, "_method": true}
 		handlerCtx := make(map[string]interface{})
 		for k, v := range ctx {
 			if !internal[k] {
