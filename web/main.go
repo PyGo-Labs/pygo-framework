@@ -1,14 +1,14 @@
 // Package web is the PyGo Framework web orchestrator.
-// It implements the Go-native HTTP server, routing, middleware,
-// and the UDS bridge to Python domain services.
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,30 +18,25 @@ import (
 	"pygo-framework/bridge"
 )
 
-// App is the main PyGo web application
 type App struct {
-	router     *Router
-	pool       *bridge.Pool
-	socket     string
-	module     string
-	projectDir string
+	router *Router
+	pool   *bridge.Pool
+	socket string
+	module string
+	server *http.Server
 }
 
-// Router is the PyGo HTTP router — Go native http.ServeMux wrapper
-// that can delegate to Python handlers via the bridge.
 type Router struct {
 	mux   *http.ServeMux
 	pool  *bridge.Pool
-	auth  map[string]bool // protected routes
-	muxed map[string]map[string]func(map[string]interface{}) (interface{}, error) // method dispatch
+	auth  map[string]bool
+	muxed map[string]map[string]func(map[string]interface{}) (interface{}, error)
 }
 
-// ServeHTTP implements http.Handler — delegates to the underlying mux.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mux.ServeHTTP(w, req)
 }
 
-// NewApp creates a new PyGo web app with UDS bridge to Python.
 func NewApp(socketPath, pyModule string) *App {
 	if socketPath == "" {
 		socketPath = filepath.Join("storage", ".pygo.sock")
@@ -50,47 +45,66 @@ func NewApp(socketPath, pyModule string) *App {
 	if pyModule == "" {
 		pyModule = "core.main"
 	}
-	projectDir, _ := os.Getwd()
 	return &App{
-		socket:     socketPath,
-		module:     pyModule,
-		router:     &Router{mux: http.NewServeMux(), auth: make(map[string]bool), muxed: make(map[string]map[string]func(map[string]interface{}) (interface{}, error))},
-		projectDir: projectDir,
+		router: &Router{
+			mux:   http.NewServeMux(),
+			auth:  make(map[string]bool),
+			muxed: make(map[string]map[string]func(map[string]interface{}) (interface{}, error)),
+		},
+		socket: socketPath,
+		module: pyModule,
 	}
 }
 
-// Router returns the app's router for registering custom routes.
 func (a *App) Router() *Router {
 	return a.router
 }
 
-// Handle registers an HTTP route. Supports multiple HTTP methods on
-// the same pattern by using an internal method-dispatch wrapper.
-// If auth is true, the route is protected (placeholder middleware).
-func (r *Router) Handle(method, pattern string, handler func(map[string]interface{}) (interface{}, error), auth, websockets bool) {
-	key := method + " " + pattern
-	r.auth[key] = auth
+func (r *Router) Handle(method, pattern string, handler func(map[string]interface{}) (interface{}, error), auth bool) {
+	r.auth[pattern] = auth
+	if _, ok := r.muxed[pattern]; !ok {
+		r.muxed[pattern] = make(map[string]func(map[string]interface{}) (interface{}, error))
+		r.mux.HandleFunc(pattern, r.routeHandler(pattern))
+	}
+	r.muxed[pattern][method] = handler
+}
 
-	// Check if pattern already registered — use muxer map for method dispatch
-	if existing, ok := r.muxed[pattern]; ok {
-		existing[method] = handler
-		return
-	}
-	r.muxed[pattern] = map[string]func(map[string]interface{}) (interface{}, error){
-		method: handler,
-	}
-	r.mux.HandleFunc(pattern, func(w http.ResponseWriter, req *http.Request) {
-		handlers := r.muxed[pattern]
-		h, ok := handlers[req.Method]
+func (r *Router) routeHandler(pattern string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		// A panicking handler must not kill the connection with an empty reply.
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("handler panic on %s %s: %v", req.Method, req.URL.Path, rec)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"result": nil,
+					"error":  fmt.Sprintf("internal handler error: %v", rec),
+				})
+			}
+		}()
+
+		methods, ok := r.muxed[pattern]
 		if !ok {
-			if h, ok = handlers[""]; !ok {
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-				return
+			http.NotFound(w, req)
+			return
+		}
+
+		ctx := extractParams(pattern, req.URL.Path)
+
+		// Expose the request path so handlers can use it safely
+		ctx["_path"] = req.URL.Path
+		ctx["_method"] = req.Method
+
+		// Inject query params
+		for k, v := range req.URL.Query() {
+			if len(v) > 0 {
+				ctx[k] = v[0]
 			}
 		}
-		ctx := extractParams(pattern, req.URL.Path)
-		// Inject request body params (form & JSON) for POST handlers
-		if req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" {
+
+		// Parse body
+		if req.Body != nil {
 			if err := req.ParseForm(); err == nil {
 				for k, v := range req.PostForm {
 					if len(v) > 0 {
@@ -98,128 +112,120 @@ func (r *Router) Handle(method, pattern string, handler func(map[string]interfac
 					}
 				}
 			}
-			// Also try JSON body
-			if ct := req.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
-				if raw, err := io.ReadAll(req.Body); err == nil && len(raw) > 0 {
-					var jsonMap map[string]interface{}
-					if json.Unmarshal(raw, &jsonMap) == nil {
-						for k, v := range jsonMap {
-							ctx[k] = v
-						}
-					} else {
-						if pairs, err := url.ParseQuery(string(raw)); err == nil {
-							for k, v := range pairs {
-								if len(v) > 0 {
-									ctx[k] = v[0]
-								}
-							}
-						}
+			body, _ := io.ReadAll(req.Body)
+			if len(body) > 0 {
+				var jsonData map[string]interface{}
+				if err := json.Unmarshal(body, &jsonData); err == nil {
+					for k, v := range jsonData {
+						ctx[k] = v
 					}
 				}
 			}
 		}
-		if r.auth[req.Method+" "+pattern] {
-			// Auth placeholder
-		}
-		result, err := h(ctx)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		handler, ok := methods[req.Method]
+		if !ok {
+			http.Error(w, `{"error":"Method Not Allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if m, ok := result.(map[string]interface{}); ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(mustJSON(m)))
-		} else if s, ok := result.(string); ok {
-			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(s))
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(mustJSON(result)))
-		}
-	})
-}
 
-// Pool returns the bridge pool for direct calls (if needed).
-func (r *Router) Pool() *bridge.Pool {
-	return r.pool
-}
-
-// Call delegates to Python domain layer via bridge.
-// Usage: result, err := app.Router().Call("core.services.users.list", map[string]any{"id": 123})
-func (a *App) Call(method string, args map[string]interface{}) (interface{}, error) {
-	return a.pool.Call(method, args)
-}
-
-// extractParams extracts path params from pattern and request path.
-// Supports Go 1.22+ syntax: /hello/{name}
-func extractParams(pattern, path string) map[string]interface{} {
-	ctx := map[string]interface{}{}
-	parts := splitPath(path)
-	patParts := splitPath(pattern)
-	for i, p := range patParts {
-		if i >= len(parts) {
-			break
-		}
-		if len(p) >= 2 && p[0] == '{' && p[len(p)-1] == '}' {
-			paramName := p[1 : len(p)-1]
-			if idx := strings.Index(paramName, ":"); idx != -1 {
-				paramName = paramName[:idx]
+		// Filter internal params
+		handlerCtx := make(map[string]interface{})
+		for k, v := range ctx {
+			if k != "token" {
+				handlerCtx[k] = v
 			}
-			ctx[paramName] = parts[i]
-		} else if len(p) > 1 && p[0] == ':' {
-			ctx[p[1:]] = parts[i]
+		}
+
+		result, err := handler(handlerCtx)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"result": nil, "error": err.Error()})
+			return
+		}
+
+		// A handler that returns raw HTML must be served as HTML, not as an
+		// escaped JSON string (the browser would render the escaped source).
+		if s, ok := result.(string); ok {
+			trimmed := strings.TrimSpace(s)
+			if strings.HasPrefix(trimmed, "<!DOCTYPE") || strings.HasPrefix(trimmed, "<html") ||
+				strings.HasPrefix(trimmed, "<div") || strings.HasPrefix(trimmed, "<section") ||
+				strings.HasPrefix(trimmed, "<tr") || strings.HasPrefix(trimmed, "<table") ||
+				strings.HasPrefix(trimmed, "<form") || strings.HasPrefix(trimmed, "<ul") ||
+				strings.HasPrefix(trimmed, "<li") || strings.HasPrefix(trimmed, "<span") ||
+				strings.HasPrefix(trimmed, "<p") || strings.HasPrefix(trimmed, "<option") {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write([]byte(s))
+				return
+			}
+		}
+
+		// Single wrap: result from Python is already {result, error}
+		w.Header().Set("Content-Type", "application/json")
+		if m, ok := result.(map[string]interface{}); ok {
+			if _, hasResult := m["result"]; hasResult {
+				json.NewEncoder(w).Encode(m)
+			} else {
+				json.NewEncoder(w).Encode(map[string]interface{}{"result": result, "error": nil})
+			}
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{"result": result, "error": nil})
+		}
+	}
+}
+
+func extractParams(pattern, path string) map[string]interface{} {
+	ctx := make(map[string]interface{})
+	parts := strings.Split(pattern, "/")
+	pathParts := strings.Split(path, "/")
+	for i, part := range parts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			paramName := part[1 : len(part)-1]
+			if i < len(pathParts) {
+				ctx[paramName] = pathParts[i]
+			}
 		}
 	}
 	return ctx
 }
 
-func splitPath(p string) []string {
-	p = strings.Trim(p, "/")
-	if p == "" {
-		return []string{}
-	}
-	return strings.Split(p, "/")
-}
-
-// Init starts the Python domain process via the UDS bridge.
 func (a *App) Init() error {
-	pool, err := bridge.NewPool(a.socket, a.module, a.projectDir)
+	pool, err := bridge.NewPool(a.socket, a.module, "")
 	if err != nil {
 		return err
 	}
 	a.pool = pool
-	a.router.pool = pool
 	return nil
 }
 
-// mustJSON encodes to JSON bytes (simple helper, no external deps).
-func mustJSON(v interface{}) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+func (a *App) Call(method string, ctx map[string]interface{}) (interface{}, error) {
+	return a.pool.Call(method, ctx)
 }
 
-// Run starts the HTTP server.
 func (a *App) Run(addr string) error {
-	if addr == "" {
-		addr = ":8080"
+	// SO_REUSEADDR to prevent "address already in use"
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return err
 	}
-	srv := &http.Server{
-		Addr:    addr,
+
+	a.server = &http.Server{
 		Handler: a.router,
 	}
 
-	// Graceful shutdown
 	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
 		log.Println("Shutting down...")
+		a.server.Shutdown(context.Background())
 		os.Remove(a.socket)
-		a.pool.Close()
-		os.Exit(0)
 	}()
 
 	log.Printf("PyGo web server ready on %s", addr)
 	log.Printf("UDS bridge to Python: %s", a.socket)
-	return srv.ListenAndServe()
+
+	return a.server.Serve(ln)
 }
